@@ -4,9 +4,7 @@ from requests import Response
 from dataclasses import dataclass
 import copy
 from typing import List, NamedTuple, Union
-from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
-from itertools import repeat
 import re
 @dataclass
 class LANG:
@@ -27,7 +25,16 @@ class DOWNLOAD:
     """ handle API request param download state"""
     TRUE = 'true'
     FALSE = 'false'
-
+@dataclass 
+class CatalogMethod:
+    """ 
+    ### handle the method of request sent to the CBS API\n
+    two methods are supported:\n
+    `LEVEL` requires a single `id` and optional `subject`\n
+    `PATH` requires a path of `ids`\n
+    """
+    LEVEL='level'
+    PATH='path'
 class Paging(NamedTuple):
     total_items:int
     page_size: int
@@ -48,7 +55,7 @@ class ILCBS_CatalogResponse(NamedTuple):
     catalog: List[Catalog]
     level: int
     paging: Paging
-    
+
 class ILCBS_API:
     ILCBS_API_URL = "https://apis.cbs.gov.il"
 
@@ -85,35 +92,41 @@ class ILCBS_API:
         self.general_query_params = query_params
         return None
 
-    def get_catalog_subjects(self, _id: int, subject: int=None, scrape_all_pages=False) -> List[ILCBS_CatalogResponse]:
+    def get_catalog_subjects(self, method:CatalogMethod, _id: int, subject: int=None,
+                             scrape_all_pages:bool=False) -> List[ILCBS_CatalogResponse]:
         """
         ### query the subjects available in the ILCBS API.
         the subjects are arranged in 5 levels `L1-L5`,
         each level includes all the subjects of the levels above it.
         #### Parameters:
-        `_id` requested subject levels (1-5)\n
+        `method` see `CatalogMethod`\n
+        `_id` requested subject level (1-5)\n
         `subject` the subject number of the level above it. (required for id > 2)\n
         `scrape_all_pages` return the
         """
         _params = copy.deepcopy(self.general_query_params)
-        _params.update({"id": _id})
+        if method  == CatalogMethod.PATH:
+            _params.update({"id": ','.join(str(item) for item in _id)})
+        else:
+            _params.update({"id": _id})
         if subject:
-            _params.update({"subject": subject})
-        response = requests.get(f"{self.ILCBS_API_URL}/series/catalog/level", params = _params)
+            if method ==  CatalogMethod.LEVEL:
+                _params.update({"subject": subject})
+        response = requests.get(f"{self.ILCBS_API_URL}/series/catalog/{method}", params = _params)
         if self.general_query_params['format'] != FORMAT.JSON:
             return list(response)
         else:
             # output is JSON, currently only this response type is supported
-            responses = [self._process_API_catalog_response(response)]
+            catalog, _, paging = self._process_API_catalog_response(response)
+            catalogs = catalog
             if scrape_all_pages is True:
-                paging = responses[0].paging
-                workers = paging.last_page - 1
+                workers = paging.last_page
                 args = ((paging.current_url, i) for i in range(2, paging.last_page + 1))
                 with ThreadPoolExecutor(max_workers = workers) as executor:
                     for response in executor.map(self._request_page, args):
-                        responses.append(self._process_API_catalog_response(response))
-
-        return responses
+                        catalog, *_ = self._process_API_catalog_response(response)
+                        catalogs.extend(catalog)
+        return catalogs
 
     def _request_page(self, args):
         url, page_num = args
@@ -133,15 +146,10 @@ class ILCBS_API:
         level = res['level']
         catalog = [Catalog(**subject) for subject in res['catalog']]
         paging = Paging(**res['paging'])
-        catalog_response = ILCBS_CatalogResponse(catalog, level, paging)
-        return catalog_response
+        return (catalog, level, paging)
 
 
     def _request_url(url: str):
         """return the response from a general url, used to get results in pages > 1"""
         return requests.get(url)
-    
-if __name__ == "__main__":
-    cbs = ILCBS_API(LANG.EN, FORMAT.JSON)
-    cbs.get_catalog_subjects(5,12, scrape_all_pages=True)
     
