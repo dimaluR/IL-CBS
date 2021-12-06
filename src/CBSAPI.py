@@ -7,6 +7,7 @@ from typing import List, NamedTuple, Union, Iterable
 from concurrent.futures import ThreadPoolExecutor
 import re
 from errors import *
+
 @dataclass
 class Download:
     """ handle API request param download state"""
@@ -140,6 +141,7 @@ class ILCBS_API:
         url, page_num = args
         re.sub('Page=\d+', f"Path={page_num}", url)
         return requests.get(url)
+    
     def _process_API_catalog_response(self, response: Response)-> ILCBS_CatalogResponse:
         """Process a JSON response from the IL-CBS API"""
         if response.text == '{"Message":"Error: Series Level Catalog"}':
@@ -154,3 +156,14 @@ class ILCBS_API:
     def _request_url(url: str):
         """return the response from a general url, used to get results in pages > 1"""
         return requests.get(url)
+
+    def find_phrase_in_subject(self, phrase: str, subject: int, levels: Iterable[int]=None)->List[Catalog]:
+        """lookup a `phrase` in a `subject` in `level`
+        `level` defaults to iterate over all levels to look in the entire subject catalog"""
+        #!!! NOT WORKING YET
+        levels = levels or range(2,6)
+        subjects = []
+        for level in levels:
+            res = self.get_catalog_subjects_by_level(level, subject, scrape_all_pages=True)
+            subjects.extend(res)
+        return subjects
